@@ -64,7 +64,10 @@ function inDangerPx(p, ct) {
 
 function walkable(game, gx, gy, allowBombAt) {
   if (!E.inB(gx, gy)) return false;
-  if (game.cell(gx, gy) !== FLOOR) return false;
+  const c = game.cell(gx, gy);
+  if (c !== FLOOR && c !== E.BUSH) return false;
+  const lv = game.lavaAt(gx, gy);
+  if (lv) return false; // 熔岩（含預警中）一律繞路
   const b = game.bombAt(gx, gy);
   if (b && !(allowBombAt && allowBombAt.gx === gx && allowBombAt.gy === gy)) return false;
   return true;
@@ -155,7 +158,7 @@ function botThink(game, pid) {
 
   // 2) 站在箱子旁或敵人附近 -> 放水球（先確認自己能在爆炸前逃到安全處）
   const enemyNear = game.players.some(q =>
-    q.id !== pid && q.alive && !q.trapped &&
+    q.id !== pid && q.alive && !q.trapped && !q.hidden &&
     Math.abs(q.x - p.x) + Math.abs(q.y - p.y) < T * 2.2);
   const ownBombs = game.bombs.filter(b => b.owner === pid).length;
   if (ownBombs < p.maxBombs && (nextToBox(game, me.gx, me.gy) || enemyNear) &&
@@ -174,7 +177,7 @@ function botThink(game, pid) {
   goals.push((x, y) => !ct.has(x + ',' + y) && !!game.items[x + ',' + y]);
   goals.push((x, y) => !ct.has(x + ',' + y) && nextToBox(game, x, y));
   for (const q of game.players) {
-    if (q.id !== pid && q.alive && !q.trapped) {
+    if (q.id !== pid && q.alive && !q.trapped && !q.hidden) { // 躲在草叢裡的敵人看不見
       const qt = tileOf(q);
       goals.push((x, y) => Math.abs(x - qt.gx) + Math.abs(y - qt.gy) <= 1);
     }

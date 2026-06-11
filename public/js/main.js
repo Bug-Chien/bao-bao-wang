@@ -34,7 +34,7 @@ function buildMapPicker(container, onPick) {
     const div = document.createElement('div');
     div.className = 'map-card';
     div.dataset.mapId = m.id;
-    div.innerHTML = `<canvas width="90" height="78"></canvas><div>${m.name}</div>`;
+    div.innerHTML = `<canvas width="90" height="78"></canvas><div>${m.name}</div><div class="map-eff">${m.desc}</div>`;
     drawMapThumb(div.querySelector('canvas'), m);
     div.onclick = () => {
       container.querySelectorAll('.map-card').forEach(c => c.classList.remove('sel'));
@@ -53,6 +53,8 @@ function drawMapThumb(cv, m) {
     for (let gx = 0; gx < Engine.COLS; gx++) {
       const c = m.rows[gy] ? m.rows[gy][gx] : '.';
       ctx.fillStyle = c === '#' ? m.theme.wall : c === 'B' ? m.theme.box :
+        c === 'G' ? (m.theme.bush1 || '#2e7d32') :
+        c === '~' ? (m.theme.water1 || '#4fb3e8') :
         (gx + gy) % 2 ? m.theme.floor1 : m.theme.floor2;
       ctx.fillRect(gx * tw, gy * th, tw + 0.5, th + 0.5);
     }

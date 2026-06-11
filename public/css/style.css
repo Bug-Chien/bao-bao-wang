@@ -75,6 +75,7 @@ input[type=checkbox] { width: 22px; height: 22px; }
   cursor: pointer;
 }
 .map-card canvas { border-radius: 6px; display: block; margin-bottom: 6px; }
+.map-eff { font-size: 11px; opacity: .65; max-width: 96px; }
 .map-card.sel { border-color: #ff9800; background: rgba(255,152,0,.15); }
 
 /* 房間列表 */

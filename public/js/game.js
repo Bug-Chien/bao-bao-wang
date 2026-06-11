@@ -145,7 +145,8 @@ const GameView = {
         ctx.fillRect(gx * T, gy * T, T, T);
       }
     }
-    // 牆與箱子
+    // 牆、箱子、河流（草叢頂層最後畫，才能蓋住玩家）
+    const bushCells = [];
     for (let gy = 0; gy < ROWS; gy++) {
       for (let gx = 0; gx < COLS; gx++) {
         const c = s.grid[gy * COLS + gx];
@@ -165,7 +166,43 @@ const GameView = {
           ctx.moveTo(x + 3, y + 3); ctx.lineTo(x + T - 3, y + T - 3);
           ctx.moveTo(x + T - 3, y + 3); ctx.lineTo(x + 3, y + T - 3);
           ctx.stroke();
+        } else if (c === '3') {    // 草叢（底色，頂層稍後畫）
+          bushCells.push([x, y]);
+        } else if (c === '4') {    // 河流（流動水波）
+          ctx.fillStyle = theme.water1 || '#4fb3e8';
+          ctx.fillRect(x, y, T, T);
+          ctx.strokeStyle = theme.water2 || '#7cc9f0';
+          ctx.lineWidth = 2;
+          for (let w = 0; w < 2; w++) {
+            const wy = y + 12 + w * 16 + Math.sin(s.t * 3 + gx * 1.3 + w * 2) * 3;
+            ctx.beginPath();
+            ctx.moveTo(x + 5, wy);
+            ctx.quadraticCurveTo(x + T / 2, wy - 4, x + T - 5, wy);
+            ctx.stroke();
+          }
         }
+      }
+    }
+    // 熔岩地磚（預警閃爍 / 噴發）
+    for (const l of s.lava || []) {
+      const x = l.gx * T, y = l.gy * T;
+      if (l.phase === 'warn') {
+        const a = 0.3 + 0.25 * Math.sin(s.t * 12);
+        ctx.fillStyle = `rgba(255,112,67,${a})`;
+        ctx.fillRect(x + 2, y + 2, T - 4, T - 4);
+      } else {
+        ctx.fillStyle = theme.lava1 || '#ff7043';
+        ctx.fillRect(x + 1, y + 1, T - 2, T - 2);
+        ctx.fillStyle = theme.lava2 || '#ffab40';
+        for (let i = 0; i < 3; i++) {
+          const bx = x + 8 + ((l.gx * 7 + i * 11) % 24);
+          const by = y + 8 + ((l.gy * 5 + i * 13) % 24);
+          const r = 3 + Math.sin(s.t * 5 + i * 2 + l.gx) * 1.5;
+          ctx.beginPath(); ctx.arc(bx, by, Math.max(1, r), 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.strokeStyle = theme.lavaEdge || '#bf360c';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x + 1, y + 1, T - 2, T - 2);
       }
     }
     // 道具
@@ -175,17 +212,20 @@ const GameView = {
     for (const it of s.items) {
       ctx.fillText(ITEM_EMOJI[it.k] || '?', it.gx * T + T / 2, it.gy * T + T / 2 + 1);
     }
-    // 水球（脈動）
+    // 水球（脈動；別人藏在草叢裡的看不到，滑行中畫在實際像素位置）
     for (const b of s.bombs) {
+      if (b.hidden && b.owner !== GameView.myId) continue;
       const pulse = 1 + 0.08 * Math.sin((3 - b.t) * 10);
       const r = 15 * pulse;
-      const cx = b.gx * T + T / 2, cy = b.gy * T + T / 2;
+      const cx = b.x, cy = b.y;
+      ctx.globalAlpha = b.hidden ? 0.5 : 1;
       ctx.fillStyle = b.t < 0.8 ? '#ff7043' : '#42a5f5';
       ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = 'rgba(255,255,255,.55)';
       ctx.beginPath(); ctx.arc(cx - r * 0.3, cy - r * 0.35, r * 0.3, 0, Math.PI * 2); ctx.fill();
       ctx.strokeStyle = '#1565c0'; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = 1;
     }
     // 水柱
     for (const e of s.ex) {
@@ -196,16 +236,29 @@ const GameView = {
       ctx.fillStyle = `rgba(187,222,251,${0.9 * a})`;
       ctx.beginPath(); ctx.arc(cx, cy, T * 0.28, 0, Math.PI * 2); ctx.fill();
     }
-    // 玩家
+    // 玩家（躲在草叢裡的別人不畫；自己半透明）
     for (const p of s.players) {
       if (!p.alive) continue;
+      if (p.hidden && p.id !== GameView.myId) { delete GameView.drawPos[p.id]; continue; }
       // 平滑插值（網路模式抖動消除）
       let dp = GameView.drawPos[p.id];
       if (!dp) dp = GameView.drawPos[p.id] = { x: p.x, y: p.y };
       const lerp = GameView.mode === 'net' ? Math.min(1, dt * 14) : 1;
       dp.x += (p.x - dp.x) * lerp;
       dp.y += (p.y - dp.y) * lerp;
+      if (p.hidden) ctx.globalAlpha = 0.55; // 自己躲草叢時半透明
       GameView._drawPlayer(ctx, p, dp.x, dp.y, s.t);
+      ctx.globalAlpha = 1;
+    }
+    // 草叢頂層（蓋在玩家上面）
+    for (const [x, y] of bushCells) {
+      ctx.fillStyle = theme.bush1 || '#2e7d32';
+      ctx.beginPath(); ctx.arc(x + 13, y + 22, 11, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(x + 28, y + 24, 10, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = theme.bush2 || '#43a047';
+      ctx.beginPath(); ctx.arc(x + 20, y + 14, 11, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(x + 31, y + 13, 8, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(x + 9, y + 12, 8, 0, Math.PI * 2); ctx.fill();
     }
     GameView._renderHud(s);
   },

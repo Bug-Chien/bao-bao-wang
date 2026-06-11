@@ -35,6 +35,8 @@ const Sound = {
   pop() { beep(700, 0.15, 'square', 0.08, 200); },
   item() { beep(660, 0.1, 'sine', 0.07, 990); },
   needle() { beep(880, 0.12, 'square', 0.06, 1320); },
+  push() { beep(420, 0.07, 'sine', 0.05, 320); },
+  lava() { beep(110, 0.4, 'sawtooth', 0.06, 70); },
   win() { beep(523, 0.15, 'sine', 0.08); setTimeout(() => beep(659, 0.15, 'sine', 0.08), 150); setTimeout(() => beep(784, 0.3, 'sine', 0.08), 300); },
   lose() { beep(330, 0.2, 'sine', 0.08); setTimeout(() => beep(262, 0.4, 'sine', 0.08), 200); },
   play(ev) {
@@ -44,6 +46,8 @@ const Sound = {
     else if (ev.k === 'pop') Sound.pop();
     else if (ev.k === 'item') Sound.item();
     else if (ev.k === 'needle') Sound.needle();
+    else if (ev.k === 'push') Sound.push();
+    else if (ev.k === 'lava') Sound.lava();
   }
 };
 root.Sound = Sound;
