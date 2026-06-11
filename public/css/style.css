@@ -1,0 +1,198 @@
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  font-family: "Microsoft JhengHei", "PingFang TC", sans-serif;
+  background: linear-gradient(160deg, #1a2a4a 0%, #24407a 60%, #1d3260 100%);
+  color: #fff;
+  touch-action: manipulation;
+}
+
+.screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 16px;
+  overflow-y: auto;
+}
+.hidden { display: none !important; }
+
+.logo {
+  font-size: clamp(28px, 6vw, 52px);
+  text-shadow: 0 4px 0 rgba(0,0,0,.35);
+  margin-bottom: 10px;
+}
+h2 { font-size: 26px; text-shadow: 0 2px 0 rgba(0,0,0,.3); }
+h3 { font-size: 15px; opacity: .85; }
+.hint { opacity: .6; font-size: 13px; margin-top: 18px; }
+.status { color: #ffcc80; min-height: 18px; }
+
+.menu-box { display: flex; flex-direction: column; gap: 12px; width: min(320px, 80vw); }
+
+button {
+  font: inherit;
+  border: 0;
+  border-radius: 12px;
+  padding: 10px 18px;
+  background: #3f5fa3;
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 3px 0 rgba(0,0,0,.3);
+  transition: transform .06s;
+}
+button:active { transform: translateY(2px); box-shadow: none; }
+button:disabled { opacity: .45; cursor: default; }
+button.sel { background: #ff9800; }
+.big-btn { font-size: 19px; padding: 14px 24px; background: #ff7043; }
+.big-btn:hover { background: #ff8a65; }
+
+input[type=text] {
+  font: inherit;
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 14px;
+  width: min(220px, 50vw);
+}
+input[type=checkbox] { width: 22px; height: 22px; }
+
+.btn-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: center; }
+.form-row { display: flex; gap: 12px; align-items: center; font-size: 18px; }
+
+/* 地圖選擇 */
+.map-picker { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+.map-card {
+  background: rgba(255,255,255,.08);
+  border: 3px solid transparent;
+  border-radius: 12px;
+  padding: 8px;
+  text-align: center;
+  font-size: 14px;
+  cursor: pointer;
+}
+.map-card canvas { border-radius: 6px; display: block; margin-bottom: 6px; }
+.map-card.sel { border-color: #ff9800; background: rgba(255,152,0,.15); }
+
+/* 房間列表 */
+.room-list {
+  width: min(440px, 92vw);
+  max-height: 45vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.room-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(255,255,255,.08);
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+.room-row span:first-child { flex: 1; font-weight: bold; }
+.room-meta { font-size: 12px; opacity: .7; }
+.empty { opacity: .6; text-align: center; padding: 24px; }
+
+/* 等待室 */
+.lobby-players { display: flex; flex-direction: column; gap: 8px; width: min(360px, 88vw); }
+.lobby-p {
+  background: rgba(255,255,255,.08);
+  border-radius: 10px;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.lobby-p .ready { margin-left: auto; font-size: 13px; opacity: .85; }
+.dot { width: 14px; height: 14px; border-radius: 50%; display: inline-block; }
+
+/* 遊戲畫面 */
+#screen-game { padding: 0; gap: 0; justify-content: flex-start; overflow: hidden; }
+#game-hud {
+  display: flex;
+  gap: 14px;
+  padding: 6px 10px;
+  font-size: 13px;
+  flex-wrap: wrap;
+  justify-content: center;
+  min-height: 30px;
+  align-items: center;
+}
+.hud-p { display: flex; align-items: center; gap: 5px; background: rgba(0,0,0,.25); border-radius: 8px; padding: 3px 8px; }
+.hud-p.dead { opacity: .45; }
+.hud-name { font-weight: bold; }
+#game-wrap {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+}
+#game-canvas { image-rendering: auto; border-radius: 6px; box-shadow: 0 6px 24px rgba(0,0,0,.45); }
+
+/* 手機觸控 */
+#touch-ui { position: fixed; inset: 0; pointer-events: none; z-index: 40; }
+#joystick {
+  position: absolute;
+  left: 18px;
+  bottom: 22px;
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  background: rgba(255,255,255,.12);
+  border: 2px solid rgba(255,255,255,.25);
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#joy-knob {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(255,255,255,.45);
+}
+#btn-action {
+  position: absolute;
+  right: 24px;
+  bottom: 34px;
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  background: rgba(255,112,67,.85);
+  border: 3px solid rgba(255,255,255,.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 36px;
+  pointer-events: auto;
+  user-select: none;
+}
+
+/* 結算 */
+#result-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.result-box {
+  background: #24407a;
+  border-radius: 18px;
+  padding: 32px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: center;
+  box-shadow: 0 10px 40px rgba(0,0,0,.5);
+}
+#result-title { font-size: 30px; font-weight: bold; }

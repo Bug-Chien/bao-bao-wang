@@ -1,0 +1,13 @@
+{
+  "name": "bao-bao-wang",
+  "version": "1.0.0",
+  "description": "復刻爆爆王 - 線上多人水球對戰遊戲",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  }
+}
