@@ -417,7 +417,7 @@ class Game {
       players: this.players.map(p => ({
         id: p.id, name: p.name, color: p.color,
         x: Math.round(p.x), y: Math.round(p.y),
-        dir: p.dir, moving: p.moving, hidden: p.hidden,
+        dir: p.dir, moving: p.moving, hidden: p.hidden, speed: p.speed,
         alive: p.alive, trapped: p.trapped, trapT: p.trapT,
         maxBombs: p.maxBombs, power: p.power, needles: p.needles, invuln: p.invuln
       })),

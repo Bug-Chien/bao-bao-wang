@@ -1,23 +1,85 @@
-/* 遊戲畫面：渲染快照 + 主迴圈（單機/連線共用） */
+/* 遊戲畫面：渲染快照 + 主迴圈（單機/連線共用）
+   連線模式採「客戶端預測 + 實體插值」消除操作延遲感。 */
 (function (root) {
 'use strict';
 const E = root.Engine;
 const { T, COLS, ROWS, W, H } = E;
+const PR = 14;                       // 與引擎玩家碰撞半寬一致
+const FLOOR = '0', BUSH = '3';       // grid 字串中的字元
 
-const ITEM_EMOJI = { b: '🎈', p: '💧', s: '👟', n: '📌' };
+const ITEM = {
+  b: { icon: '🎈', bg: '#ff7eb3' },
+  p: { icon: '💧', bg: '#4fc3f7' },
+  s: { icon: '👟', bg: '#aed581' },
+  n: { icon: '📌', bg: '#ffd54f' }
+};
 
+/* ====================== 客戶端預測器（連線模式本機角色） ====================== */
+const Predictor = {
+  active: false,
+  x: 0, y: 0, dir: 'down',
+  initFrom(p) { this.x = p.x; this.y = p.y; this.dir = p.dir || 'down'; this.active = true; },
+
+  // 與引擎 passable 相同的碰撞判定（讀快照）
+  passable(snap, x, y, curX, curY) {
+    if (x - PR < 0 || x + PR > W || y - PR < 0 || y + PR > H) return false;
+    const x0 = Math.floor((x - PR) / T), x1 = Math.floor((x + PR - 0.01) / T);
+    const y0 = Math.floor((y - PR) / T), y1 = Math.floor((y + PR - 0.01) / T);
+    for (let gy = y0; gy <= y1; gy++) {
+      for (let gx = x0; gx <= x1; gx++) {
+        const c = snap.grid[gy * COLS + gx];
+        if (c !== FLOOR && c !== BUSH) return false;
+        const lv = (snap.lava || []).find(l => l.gx === gx && l.gy === gy && l.phase === 'on');
+        if (lv) return false;
+        const b = snap.bombs.find(bb => bb.gx === gx && bb.gy === gy);
+        if (b && !overlapTile(curX, curY, gx, gy)) return false;
+      }
+    }
+    return true;
+  },
+
+  // 用目前輸入推進本機角色（與引擎 movePlayer 相同，含轉角輔助）
+  step(dt, snap, speed) {
+    const dx = Controls.dx, dy = Controls.dy;
+    if (!dx && !dy) return;
+    if (dx) this.dir = dx > 0 ? 'right' : 'left';
+    else if (dy) this.dir = dy > 0 ? 'down' : 'up';
+    const d = speed * dt;
+    const nx = this.x + dx * d, ny = this.y + dy * d;
+    if (this.passable(snap, nx, ny, this.x, this.y)) { this.x = nx; this.y = ny; return; }
+    if (dx) {
+      const cy = Math.floor(this.y / T) * T + T / 2;
+      const slide = Math.sign(cy - this.y) || 0;
+      if (slide && this.passable(snap, this.x, this.y + slide * d, this.x, this.y) &&
+          this.passable(snap, nx, cy, this.x, this.y)) this.y += slide * Math.min(d, Math.abs(cy - this.y));
+    } else if (dy) {
+      const cx = Math.floor(this.x / T) * T + T / 2;
+      const slide = Math.sign(cx - this.x) || 0;
+      if (slide && this.passable(snap, this.x + slide * d, this.y, this.x, this.y) &&
+          this.passable(snap, cx, ny, this.x, this.y)) this.x += slide * Math.min(d, Math.abs(cx - this.x));
+    }
+  },
+
+  // 收到權威快照後校正：誤差大就瞬移，否則柔性靠攏（避免抖動）
+  reconcile(p) {
+    if (!this.active) { this.initFrom(p); return; }
+    const err = Math.hypot(p.x - this.x, p.y - this.y);
+    if (err > T * 1.4) { this.x = p.x; this.y = p.y; }
+    else { this.x += (p.x - this.x) * 0.2; this.y += (p.y - this.y) * 0.2; }
+  }
+};
+
+function overlapTile(x, y, gx, gy) {
+  return Math.abs(x - (gx * T + T / 2)) < T / 2 + PR &&
+         Math.abs(y - (gy * T + T / 2)) < T / 2 + PR;
+}
+
+/* ====================== 遊戲畫面 ====================== */
 const GameView = {
   canvas: null, ctx: null,
-  mode: null,          // 'local' | 'net'
-  localGame: null,
-  bots: [],            // 單機機器人 id
-  snap: null,
-  drawPos: {},         // id -> {x,y} 平滑顯示位置
-  myId: null,
-  running: false,
-  lastTime: 0,
-  botTimer: 0,
-  onExit: null,        // 離開遊戲畫面回呼
+  mode: null, localGame: null, bots: [],
+  snap: null, drawPos: {}, myId: null,
+  running: false, lastTime: 0, botTimer: 0, bannerT: 0,
 
   init() {
     GameView.canvas = document.getElementById('game-canvas');
@@ -59,6 +121,7 @@ const GameView = {
     GameView.myId = 'me';
     GameView.localGame = new E.Game(mapId, info);
     GameView.snap = GameView.localGame.snapshot();
+    Predictor.active = false;
     GameView._begin();
   },
 
@@ -67,12 +130,20 @@ const GameView = {
     GameView.myId = myId;
     GameView.localGame = null;
     GameView.snap = firstSnap || null;
+    Predictor.active = false;
+    if (firstSnap) {
+      const me = firstSnap.players.find(p => p.id === myId);
+      if (me) Predictor.initFrom(me);
+    }
     GameView._begin();
   },
 
   onNetState(snap) {
     GameView.snap = snap;
     for (const ev of snap.events || []) Sound.play(ev);
+    const me = snap.players.find(p => p.id === GameView.myId);
+    if (me && me.alive && !me.trapped) Predictor.reconcile(me);
+    else Predictor.active = false;
     if (snap.over) GameView._showResult(snap);
   },
 
@@ -81,15 +152,26 @@ const GameView = {
     GameView.running = true;
     GameView.lastTime = performance.now();
     GameView.botTimer = 0;
+    GameView.bannerT = 1.8;
+    GameView._resultDone = false;
     document.getElementById('result-overlay').classList.add('hidden');
+    GameView._showBanner();
     Controls.reset();
     GameView.fit();
     requestAnimationFrame(GameView._loop);
   },
 
-  stop() {
-    GameView.running = false;
-    Controls.reset();
+  stop() { GameView.running = false; Controls.reset(); },
+
+  _showBanner() {
+    const map = E.MAPS[(GameView.snap && GameView.snap.mapId) || 0];
+    const el = document.getElementById('match-banner');
+    if (!el || !map) return;
+    el.innerHTML = `<div class="mb-name">${esc(map.name)}</div><div class="mb-eff">${esc(map.desc)}</div>`;
+    el.classList.remove('hidden');
+    el.classList.add('show');
+    setTimeout(() => { el.classList.remove('show'); }, 1500);
+    setTimeout(() => { el.classList.add('hidden'); }, 1900);
   },
 
   _loop(now) {
@@ -113,6 +195,9 @@ const GameView = {
       for (const ev of snap.events) Sound.play(ev);
       GameView.snap = snap;
       if (snap.over) GameView._showResult(snap);
+    } else if (GameView.mode === 'net' && GameView.snap && Predictor.active) {
+      const me = GameView.snap.players.find(p => p.id === GameView.myId);
+      if (me) Predictor.step(dt, GameView.snap, me.speed || 130);
     }
 
     if (GameView.snap) GameView._render(GameView.snap, dt);
@@ -120,55 +205,54 @@ const GameView = {
   },
 
   _showResult(snap) {
-    if (GameView._resultShown === snap.over && GameView._resultT === snap.t) return;
     if (GameView._resultDone) return;
     GameView._resultDone = true;
     const ov = document.getElementById('result-overlay');
     const title = document.getElementById('result-title');
+    const sub = document.getElementById('result-sub');
     const winner = snap.players.find(p => p.id === snap.winner);
-    if (!snap.winner) title.textContent = '平手！';
-    else if (snap.winner === GameView.myId) { title.textContent = '🏆 你贏了！'; Sound.win(); }
-    else { title.textContent = `🏆 ${winner ? winner.name : '?'} 獲勝`; if (snap.winner !== GameView.myId) Sound.lose(); }
+    if (!snap.winner) { title.textContent = '🤝 平手！'; sub.textContent = '同歸於盡'; }
+    else if (snap.winner === GameView.myId) { title.textContent = '🏆 勝利！'; sub.textContent = '你是最後的贏家'; Sound.win(); }
+    else { title.textContent = '💧 落敗'; sub.textContent = `${winner ? winner.name : '?'} 獲勝`; Sound.lose(); }
     document.getElementById('btn-rematch').style.display = GameView.mode === 'local' ? '' : 'none';
     ov.classList.remove('hidden');
-    setTimeout(() => { GameView._resultDone = false; }, 100);
   },
 
   /* ---------- 渲染 ---------- */
   _render(s, dt) {
     const ctx = GameView.ctx;
     const theme = (E.MAPS[s.mapId] || E.MAPS[0]).theme;
-    // 地板
+    // 地板（含柔和格紋）
     for (let gy = 0; gy < ROWS; gy++) {
       for (let gx = 0; gx < COLS; gx++) {
         ctx.fillStyle = (gx + gy) % 2 ? theme.floor1 : theme.floor2;
         ctx.fillRect(gx * T, gy * T, T, T);
       }
     }
-    // 牆、箱子、河流（草叢頂層最後畫，才能蓋住玩家）
+    // 牆、箱子、河流（草叢頂層最後畫）
     const bushCells = [];
     for (let gy = 0; gy < ROWS; gy++) {
       for (let gx = 0; gx < COLS; gx++) {
         const c = s.grid[gy * COLS + gx];
         const x = gx * T, y = gy * T;
-        if (c === '1') {           // 硬牆
-          ctx.fillStyle = theme.wall;
-          ctx.fillRect(x + 1, y + 1, T - 2, T - 2);
-          ctx.fillStyle = theme.wallTop;
-          ctx.fillRect(x + 1, y + 1, T - 2, 8);
-        } else if (c === '2') {    // 木箱
-          ctx.fillStyle = theme.box;
-          ctx.fillRect(x + 3, y + 3, T - 6, T - 6);
-          ctx.strokeStyle = theme.boxEdge;
-          ctx.lineWidth = 2;
-          ctx.strokeRect(x + 3, y + 3, T - 6, T - 6);
+        if (c === '1') {
+          rr(ctx, x + 1, y + 1, T - 2, T - 2, 7);
+          ctx.fillStyle = theme.wall; ctx.fill();
+          rr(ctx, x + 3, y + 2, T - 6, T - 8, 6);
+          ctx.fillStyle = theme.wallTop; ctx.fill();
+        } else if (c === '2') {
+          rr(ctx, x + 3, y + 3, T - 6, T - 6, 6);
+          ctx.fillStyle = theme.box; ctx.fill();
+          ctx.strokeStyle = theme.boxEdge; ctx.lineWidth = 2.5; ctx.stroke();
           ctx.beginPath();
-          ctx.moveTo(x + 3, y + 3); ctx.lineTo(x + T - 3, y + T - 3);
-          ctx.moveTo(x + T - 3, y + 3); ctx.lineTo(x + 3, y + T - 3);
+          ctx.moveTo(x + 6, y + 6); ctx.lineTo(x + T - 6, y + T - 6);
+          ctx.moveTo(x + T - 6, y + 6); ctx.lineTo(x + 6, y + T - 6);
           ctx.stroke();
-        } else if (c === '3') {    // 草叢（底色，頂層稍後畫）
+          ctx.fillStyle = 'rgba(255,255,255,.18)';
+          rr(ctx, x + 6, y + 6, T - 12, 5, 2); ctx.fill();
+        } else if (c === '3') {
           bushCells.push([x, y]);
-        } else if (c === '4') {    // 河流（流動水波）
+        } else if (c === '4') {
           ctx.fillStyle = theme.water1 || '#4fb3e8';
           ctx.fillRect(x, y, T, T);
           ctx.strokeStyle = theme.water2 || '#7cc9f0';
@@ -183,16 +267,17 @@ const GameView = {
         }
       }
     }
-    // 熔岩地磚（預警閃爍 / 噴發）
+    // 熔岩地磚
     for (const l of s.lava || []) {
       const x = l.gx * T, y = l.gy * T;
       if (l.phase === 'warn') {
-        const a = 0.3 + 0.25 * Math.sin(s.t * 12);
-        ctx.fillStyle = `rgba(255,112,67,${a})`;
-        ctx.fillRect(x + 2, y + 2, T - 4, T - 4);
+        const a = 0.3 + 0.28 * Math.sin(s.t * 12);
+        rr(ctx, x + 2, y + 2, T - 4, T - 4, 6);
+        ctx.fillStyle = `rgba(255,112,67,${a})`; ctx.fill();
+        ctx.strokeStyle = `rgba(255,82,40,${a + 0.2})`; ctx.lineWidth = 2; ctx.stroke();
       } else {
-        ctx.fillStyle = theme.lava1 || '#ff7043';
-        ctx.fillRect(x + 1, y + 1, T - 2, T - 2);
+        rr(ctx, x + 1, y + 1, T - 2, T - 2, 6);
+        ctx.fillStyle = theme.lava1 || '#ff7043'; ctx.fill();
         ctx.fillStyle = theme.lava2 || '#ffab40';
         for (let i = 0; i < 3; i++) {
           const bx = x + 8 + ((l.gx * 7 + i * 11) % 24);
@@ -200,30 +285,37 @@ const GameView = {
           const r = 3 + Math.sin(s.t * 5 + i * 2 + l.gx) * 1.5;
           ctx.beginPath(); ctx.arc(bx, by, Math.max(1, r), 0, Math.PI * 2); ctx.fill();
         }
-        ctx.strokeStyle = theme.lavaEdge || '#bf360c';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(x + 1, y + 1, T - 2, T - 2);
+        rr(ctx, x + 1, y + 1, T - 2, T - 2, 6);
+        ctx.strokeStyle = theme.lavaEdge || '#bf360c'; ctx.lineWidth = 2.5; ctx.stroke();
       }
     }
-    // 道具
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = '24px sans-serif';
+    // 道具（圓底徽章 + 浮動）
     for (const it of s.items) {
-      ctx.fillText(ITEM_EMOJI[it.k] || '?', it.gx * T + T / 2, it.gy * T + T / 2 + 1);
+      const cx = it.gx * T + T / 2, cy = it.gy * T + T / 2 + Math.sin(s.t * 3 + it.gx + it.gy) * 2;
+      const meta = ITEM[it.k] || { icon: '?', bg: '#fff' };
+      ctx.fillStyle = meta.bg;
+      ctx.beginPath(); ctx.arc(cx, cy, 13, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,.35)';
+      ctx.beginPath(); ctx.arc(cx - 4, cy - 5, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = '17px sans-serif';
+      ctx.fillText(meta.icon, cx, cy + 1);
     }
-    // 水球（脈動；別人藏在草叢裡的看不到，滑行中畫在實際像素位置）
+    // 水球
     for (const b of s.bombs) {
       if (b.hidden && b.owner !== GameView.myId) continue;
       const pulse = 1 + 0.08 * Math.sin((3 - b.t) * 10);
       const r = 15 * pulse;
       const cx = b.x, cy = b.y;
       ctx.globalAlpha = b.hidden ? 0.5 : 1;
-      ctx.fillStyle = b.t < 0.8 ? '#ff7043' : '#42a5f5';
+      const grad = ctx.createRadialGradient(cx - 4, cy - 5, 2, cx, cy, r);
+      const danger = b.t < 0.8;
+      grad.addColorStop(0, danger ? '#ffd0b0' : '#bbe3ff');
+      grad.addColorStop(1, danger ? '#ff7043' : '#42a5f5');
+      ctx.fillStyle = grad;
       ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = 'rgba(255,255,255,.55)';
-      ctx.beginPath(); ctx.arc(cx - r * 0.3, cy - r * 0.35, r * 0.3, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = '#1565c0'; ctx.lineWidth = 2;
+      ctx.fillStyle = 'rgba(255,255,255,.7)';
+      ctx.beginPath(); ctx.arc(cx - r * 0.3, cy - r * 0.35, r * 0.28, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = danger ? '#c1440e' : '#1565c0'; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
       ctx.globalAlpha = 1;
     }
@@ -231,26 +323,34 @@ const GameView = {
     for (const e of s.ex) {
       const a = Math.min(1, e.t / 0.35);
       const cx = e.gx * T + T / 2, cy = e.gy * T + T / 2;
-      ctx.fillStyle = `rgba(66,165,245,${0.75 * a})`;
+      ctx.fillStyle = `rgba(66,165,245,${0.7 * a})`;
       ctx.beginPath(); ctx.arc(cx, cy, T * 0.48, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = `rgba(187,222,251,${0.9 * a})`;
+      ctx.fillStyle = `rgba(187,222,251,${0.95 * a})`;
       ctx.beginPath(); ctx.arc(cx, cy, T * 0.28, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = `rgba(255,255,255,${0.9 * a})`;
+      ctx.beginPath(); ctx.arc(cx - 4, cy - 4, T * 0.1, 0, Math.PI * 2); ctx.fill();
     }
-    // 玩家（躲在草叢裡的別人不畫；自己半透明）
+    // 玩家
     for (const p of s.players) {
       if (!p.alive) continue;
       if (p.hidden && p.id !== GameView.myId) { delete GameView.drawPos[p.id]; continue; }
-      // 平滑插值（網路模式抖動消除）
-      let dp = GameView.drawPos[p.id];
-      if (!dp) dp = GameView.drawPos[p.id] = { x: p.x, y: p.y };
-      const lerp = GameView.mode === 'net' ? Math.min(1, dt * 14) : 1;
-      dp.x += (p.x - dp.x) * lerp;
-      dp.y += (p.y - dp.y) * lerp;
-      if (p.hidden) ctx.globalAlpha = 0.55; // 自己躲草叢時半透明
-      GameView._drawPlayer(ctx, p, dp.x, dp.y, s.t);
+      let dx, dy, dir = p.dir;
+      if (p.id === GameView.myId && GameView.mode === 'net' && Predictor.active) {
+        dx = Predictor.x; dy = Predictor.y; dir = Predictor.dir;
+        GameView.drawPos[p.id] = { x: dx, y: dy };
+      } else {
+        let dp = GameView.drawPos[p.id];
+        if (!dp) dp = GameView.drawPos[p.id] = { x: p.x, y: p.y };
+        const lerp = GameView.mode === 'net' ? Math.min(1, dt * 22) : 1;
+        dp.x += (p.x - dp.x) * lerp;
+        dp.y += (p.y - dp.y) * lerp;
+        dx = dp.x; dy = dp.y;
+      }
+      if (p.hidden) ctx.globalAlpha = 0.55;
+      GameView._drawPlayer(ctx, p, dx, dy, s.t, dir);
       ctx.globalAlpha = 1;
     }
-    // 草叢頂層（蓋在玩家上面）
+    // 草叢頂層
     for (const [x, y] of bushCells) {
       ctx.fillStyle = theme.bush1 || '#2e7d32';
       ctx.beginPath(); ctx.arc(x + 13, y + 22, 11, 0, Math.PI * 2); ctx.fill();
@@ -259,27 +359,32 @@ const GameView = {
       ctx.beginPath(); ctx.arc(x + 20, y + 14, 11, 0, Math.PI * 2); ctx.fill();
       ctx.beginPath(); ctx.arc(x + 31, y + 13, 8, 0, Math.PI * 2); ctx.fill();
       ctx.beginPath(); ctx.arc(x + 9, y + 12, 8, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,.12)';
+      ctx.beginPath(); ctx.arc(x + 17, y + 11, 4, 0, Math.PI * 2); ctx.fill();
     }
     GameView._renderHud(s);
   },
 
-  _drawPlayer(ctx, p, x, y, time) {
+  _drawPlayer(ctx, p, x, y, time, dir) {
     const blink = p.invuln > 0 && Math.floor(time * 10) % 2 === 0;
-    if (blink) return;
+    if (blink) ctx.globalAlpha *= 0.4;
     const bob = p.moving ? Math.sin(time * 14) * 2 : 0;
     // 影子
     ctx.fillStyle = 'rgba(0,0,0,.18)';
     ctx.beginPath(); ctx.ellipse(x, y + 14, 13, 5, 0, 0, Math.PI * 2); ctx.fill();
-    // 身體
-    ctx.fillStyle = p.color;
+    // 身體（球面漸層）
+    const grad = ctx.createRadialGradient(x - 4, y - 8 + bob, 2, x, y - 2 + bob, 15);
+    grad.addColorStop(0, lighten(p.color, 0.4));
+    grad.addColorStop(1, p.color);
+    ctx.fillStyle = grad;
     ctx.beginPath(); ctx.arc(x, y - 2 + bob, 14, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,0,0,.22)'; ctx.lineWidth = 2; ctx.stroke();
     // 眼睛
-    const ex = p.dir === 'left' ? -4 : p.dir === 'right' ? 4 : 0;
-    const ey = p.dir === 'up' ? -4 : p.dir === 'down' ? 2 : 0;
+    const ex = dir === 'left' ? -4 : dir === 'right' ? 4 : 0;
+    const ey = dir === 'up' ? -4 : dir === 'down' ? 2 : 0;
     ctx.fillStyle = '#fff';
-    ctx.beginPath(); ctx.arc(x - 5 + ex, y - 5 + ey + bob, 4, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(x + 5 + ex, y - 5 + ey + bob, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x - 5 + ex, y - 5 + ey + bob, 4.2, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x + 5 + ex, y - 5 + ey + bob, 4.2, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#333';
     ctx.beginPath(); ctx.arc(x - 5 + ex * 1.4, y - 5 + ey * 1.3 + bob, 2, 0, Math.PI * 2); ctx.fill();
     ctx.beginPath(); ctx.arc(x + 5 + ex * 1.4, y - 5 + ey * 1.3 + bob, 2, 0, Math.PI * 2); ctx.fill();
@@ -290,17 +395,19 @@ const GameView = {
       ctx.lineWidth = 3;
       ctx.beginPath(); ctx.arc(x, y - 2, 21 + Math.sin(time * 6) * 1.5, 0, Math.PI * 2);
       ctx.fill(); ctx.stroke();
-      // 倒數
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(x - 7, y - 9, 3, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = '#d32f2f';
-      ctx.font = 'bold 13px sans-serif';
+      ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
       ctx.fillText(Math.ceil(p.trapT), x, y - 30);
     }
     // 名字
-    ctx.fillStyle = p.id === GameView.myId ? '#fff176' : 'rgba(255,255,255,.92)';
-    ctx.font = 'bold 11px sans-serif';
+    ctx.fillStyle = p.id === GameView.myId ? '#fff176' : 'rgba(255,255,255,.95)';
+    ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center';
     ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.lineWidth = 3;
     ctx.strokeText(p.name, x, y - 24);
     ctx.fillText(p.name, x, y - 24);
+    if (blink) ctx.globalAlpha /= 0.4;
   },
 
   _renderHud(s) {
@@ -308,15 +415,36 @@ const GameView = {
     let html = '';
     for (const p of s.players) {
       const dead = !p.alive;
-      html += `<div class="hud-p ${dead ? 'dead' : ''}">
-        <span class="dot" style="background:${p.color}"></span>
-        <span class="hud-name">${esc(p.name)}</span>
-        ${dead ? '💀' : p.trapped ? '🫧' : `🎈${p.maxBombs} 💧${p.power}${p.needles ? ' 📌' + p.needles : ''}`}
+      const me = p.id === GameView.myId ? ' me' : '';
+      const status = dead ? '<span class="hud-x">💀</span>'
+        : p.trapped ? '<span class="hud-x">🫧</span>'
+        : `<span class="hud-stat">🎈${p.maxBombs}</span><span class="hud-stat">💧${p.power}</span>${p.needles ? `<span class="hud-stat">📌${p.needles}</span>` : ''}`;
+      html += `<div class="hud-p${me}${dead ? ' dead' : ''}">
+        <span class="hud-av" style="background:${p.color}"></span>
+        <span class="hud-info"><span class="hud-name">${esc(p.name)}</span><span class="hud-row">${status}</span></span>
       </div>`;
     }
     if (hud._last !== html) { hud.innerHTML = html; hud._last = html; }
   }
 };
+
+/* 圓角矩形 path */
+function rr(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function lighten(hex, amt) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (!m) return hex;
+  const f = v => Math.round(parseInt(v, 16) + (255 - parseInt(v, 16)) * amt);
+  return `rgb(${f(m[1])},${f(m[2])},${f(m[3])})`;
+}
 
 function esc(str) {
   return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

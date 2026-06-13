@@ -124,8 +124,8 @@ function renderRooms(rooms) {
   }
   list.innerHTML = rooms.map(r => `
     <div class="room-row">
-      <span>${escHtml(r.name)}</span>
-      <span class="room-meta">${Engine.MAPS[r.mapId].name}・${r.count}/4 ${r.playing ? '・遊戲中' : ''}</span>
+      <span class="rn">${escHtml(r.name)}</span>
+      <span class="room-meta">${Engine.MAPS[r.mapId].name}・${r.count}/4${r.playing ? '・遊戲中' : ''}</span>
       <button data-id="${r.id}" ${r.count >= 4 || r.playing ? 'disabled' : ''}>加入</button>
     </div>`).join('');
   list.querySelectorAll('button').forEach(b => b.onclick = () => Net.joinRoom(b.dataset.id));
@@ -135,12 +135,21 @@ function renderLobby(room) {
   $('lobby-title').textContent = room.name;
   const me = room.players.find(p => p.id === Net.myId);
   const isHost = room.hostId === Net.myId;
-  $('lobby-players').innerHTML = room.players.map(p => `
-    <div class="lobby-p">
-      <span class="dot" style="background:${Engine.COLORS[p.slot]}"></span>
-      ${escHtml(p.name)}${p.id === room.hostId ? ' 👑' : ''}
-      <span class="ready">${p.id === room.hostId ? '' : (p.ready ? '✅ 已準備' : '…等待中')}</span>
-    </div>`).join('');
+  let slotsHtml = '';
+  for (let i = 0; i < 4; i++) {
+    const p = room.players[i];
+    if (p) {
+      const tag = p.id === room.hostId ? '<span class="slot-tag">👑 房主</span>'
+        : (p.ready ? '<span class="slot-tag ok">✅ 已準備</span>' : '<span class="slot-tag">…等待中</span>');
+      slotsHtml += `<div class="lobby-slot">
+        <span class="avatar" style="background:${Engine.COLORS[p.slot]}"></span>
+        <span class="slot-info"><span class="slot-name">${escHtml(p.name)}${p.id === Net.myId ? '（你）' : ''}</span>${tag}</span>
+      </div>`;
+    } else {
+      slotsHtml += '<div class="lobby-slot empty-slot">等待玩家加入…</div>';
+    }
+  }
+  $('lobby-players').innerHTML = slotsHtml;
   $('lobby-map-name').textContent = Engine.MAPS[room.mapId].name;
   $('lobby-maps').style.display = isHost ? '' : 'none';
   if (isHost && !$('lobby-maps')._built) {
@@ -194,6 +203,13 @@ window.addEventListener('DOMContentLoaded', () => {
   };
   $('btn-start').onclick = () => Net.startGame();
   $('btn-leave-room').onclick = () => Net.leaveRoom();
+
+  // 遊戲中離開
+  $('btn-game-leave').onclick = () => {
+    GameView.stop();
+    if (GameView.mode === 'net') { Net.leaveRoom(); show('screen-online'); }
+    else show('screen-menu');
+  };
 
   // 結算畫面按鈕
   $('btn-rematch').onclick = () => {

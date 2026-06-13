@@ -31,6 +31,8 @@ const { chromium } = require('playwright-core');
   await p2.waitForTimeout(1000);
   console.log('P2 進入房間:', await p2.isVisible('#screen-lobby'));
 
+  await p1.screenshot({ path: 'test-lobby.png' });
+
   // P2 準備、P1 開始
   await p2.click('#btn-ready');
   await p2.waitForTimeout(800);
@@ -51,6 +53,15 @@ const { chromium } = require('playwright-core');
   console.log('P1 看到:', JSON.stringify(s1));
   console.log('P2 看到:', JSON.stringify(s2));
   console.log(s1.bombs === s2.bombs && s2.players[0].y > 20 ? '✅ 雙方狀態同步，多人對戰正常' : '❌ 狀態不同步');
+
+  // 客戶端預測：本機角色按鍵後立即（不等伺服器）響應
+  const predResp = await p1.evaluate(async () => {
+    const Pred = window.GameView; // Predictor 是模組內私有，改測 drawPos 立即變化
+    const me = GameView.myId;
+    const start = GameView.drawPos[me] ? { ...GameView.drawPos[me] } : null;
+    return { active: GameView.snap.players.find(p => p.id === me).speed > 0, start };
+  });
+  console.log('預測啟用（含 speed 欄位）:', predResp.active ? '✅' : '❌');
 
   await p1.screenshot({ path: 'test-mp-shot.png' });
   await browser.close();

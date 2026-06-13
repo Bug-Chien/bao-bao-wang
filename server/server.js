@@ -14,7 +14,7 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 
 const PORT = process.env.PORT || 3000;
 const TICK = 1 / 30;        // 遊戲邏輯 30Hz
-const SNAP_EVERY = 2;       // 每 2 tick 廣播一次（15Hz）
+const SNAP_EVERY = 1;       // 每 tick 廣播（30Hz）：搭配客戶端預測降低延遲感
 
 const rooms = new Map();    // id -> room
 let roomSeq = 1;

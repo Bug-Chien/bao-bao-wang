@@ -1,18 +1,22 @@
-/* 鍵盤 + 手機虛擬搖桿控制 */
+/* 鍵盤 + 手機浮動虛擬搖桿控制
+   手機端：左半畫面任意處按下即生成搖桿（浮動式），方向採死區 + 遲滯避免抖動。 */
 (function (root) {
 'use strict';
 
+const DEAD = 0.30;   // 死區（相對最大半徑）
+const HYST = 1.35;   // 遲滯：另一軸需超過目前軸這麼多倍才改向
+
 const Controls = {
   dx: 0, dy: 0,
-  onChange: null,   // (dx, dy) 方向改變
-  onAction: null,   // 放水球 / 用針
+  onChange: null,
+  onAction: null,
   _keys: {},
 
   init() {
     window.addEventListener('keydown', e => {
       if (e.repeat) return;
       const k = e.key.toLowerCase();
-      if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(e.key.toLowerCase()) || e.key === ' ') e.preventDefault();
+      if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
       if (k === ' ' || k === 'j' || k === 'enter') { Controls._fireAction(); return; }
       Controls._keys[k] = true;
       Controls._recalc();
@@ -42,52 +46,76 @@ const Controls = {
     if (Controls.onChange) Controls.onChange(dx, dy);
   },
 
+  _vibe(ms) { try { if (navigator.vibrate) navigator.vibrate(ms); } catch (e) {} },
+
   _initTouch() {
-    const pad = document.getElementById('joystick');
+    const ui = document.getElementById('touch-ui');
+    const zone = document.getElementById('joy-zone');
+    const base = document.getElementById('joystick');
     const knob = document.getElementById('joy-knob');
     const btn = document.getElementById('btn-action');
-    if (!pad || !btn) return;
-    if (!('ontouchstart' in window)) {
-      document.getElementById('touch-ui').style.display = 'none';
-      return;
-    }
-    let joyId = null;
-    const center = () => {
-      const r = pad.getBoundingClientRect();
-      return { x: r.left + r.width / 2, y: r.top + r.height / 2, rad: r.width / 2 };
+    if (!ui || !zone || !base || !btn) return;
+    const touchCapable = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+    if (!touchCapable) { ui.style.display = 'none'; return; }
+    document.body.classList.add('touch');
+
+    const RAD = 60;        // 搖桿最大半徑
+    let joyId = null, ox = 0, oy = 0;
+
+    const showBase = (x, y) => {
+      base.style.left = x + 'px';
+      base.style.top = y + 'px';
+      base.classList.add('active');
+      knob.style.transform = 'translate(-50%,-50%)';
     };
+    const hideBase = () => { base.classList.remove('active'); Controls._set(0, 0); };
+
     const handle = t => {
-      const c = center();
-      let vx = t.clientX - c.x, vy = t.clientY - c.y;
-      const len = Math.hypot(vx, vy);
-      const max = c.rad - 18;
-      if (len > max) { vx = vx / len * max; vy = vy / len * max; }
-      knob.style.transform = `translate(${vx}px, ${vy}px)`;
-      if (len < c.rad * 0.25) { Controls._set(0, 0); return; }
-      if (Math.abs(vx) > Math.abs(vy)) Controls._set(Math.sign(vx), 0);
-      else Controls._set(0, Math.sign(vy));
+      let vx = t.clientX - ox, vy = t.clientY - oy;
+      let len = Math.hypot(vx, vy);
+      if (len > RAD) { vx = vx / len * RAD; vy = vy / len * RAD; len = RAD; }
+      knob.style.transform = `translate(calc(-50% + ${vx}px), calc(-50% + ${vy}px))`;
+      if (len < RAD * DEAD) { Controls._set(0, 0); return; }
+      // 死區外：依主軸決定方向，加遲滯避免對角線抖動
+      const ax = Math.abs(vx), ay = Math.abs(vy);
+      let dx = 0, dy = 0;
+      if (Controls.dx && ax >= ay / HYST) dx = Math.sign(vx);            // 維持水平
+      else if (Controls.dy && ay >= ax / HYST) dy = Math.sign(vy);       // 維持垂直
+      else if (ax > ay) dx = Math.sign(vx);
+      else dy = Math.sign(vy);
+      Controls._set(dx, dy);
     };
-    pad.addEventListener('touchstart', e => {
+
+    zone.addEventListener('touchstart', e => {
       e.preventDefault();
-      joyId = e.changedTouches[0].identifier;
-      handle(e.changedTouches[0]);
+      if (joyId !== null) return;
+      const t = e.changedTouches[0];
+      joyId = t.identifier;
+      ox = t.clientX; oy = t.clientY;
+      showBase(ox, oy);
+      handle(t);
     }, { passive: false });
-    pad.addEventListener('touchmove', e => {
+
+    zone.addEventListener('touchmove', e => {
       e.preventDefault();
       for (const t of e.changedTouches) if (t.identifier === joyId) handle(t);
     }, { passive: false });
+
     const end = e => {
       for (const t of e.changedTouches) {
-        if (t.identifier === joyId) {
-          joyId = null;
-          knob.style.transform = 'translate(0,0)';
-          Controls._set(0, 0);
-        }
+        if (t.identifier === joyId) { joyId = null; hideBase(); }
       }
     };
-    pad.addEventListener('touchend', end);
-    pad.addEventListener('touchcancel', end);
-    btn.addEventListener('touchstart', e => { e.preventDefault(); Controls._fireAction(); }, { passive: false });
+    zone.addEventListener('touchend', end);
+    zone.addEventListener('touchcancel', end);
+
+    btn.addEventListener('touchstart', e => {
+      e.preventDefault();
+      btn.classList.add('press');
+      Controls._vibe(12);
+      Controls._fireAction();
+    }, { passive: false });
+    btn.addEventListener('touchend', e => { e.preventDefault(); btn.classList.remove('press'); }, { passive: false });
   },
 
   reset() { Controls._keys = {}; Controls._set(0, 0); }

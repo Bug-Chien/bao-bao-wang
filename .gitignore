@@ -1,2 +1,5 @@
 .vercel
 node_modules/
+# 測試產生的截圖（非遊戲素材，遊戲畫面皆為 canvas 繪製）
+test-*.png
+ui-*.png
